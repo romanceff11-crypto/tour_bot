@@ -18,7 +18,8 @@ print(f"HUGGINGFACE_TOKEN: {'OK' if HUGGINGFACE_TOKEN else 'MISSING'}")
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 
-MODEL_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.3"
+# Используем модель Google Gemma 2 9B Instruct
+MODEL_URL = "https://api-inference.huggingface.co/models/google/gemma-2-9b-it"
 
 SYSTEM_PROMPT = """Ты — Анна, топ-менеджер по продажам туристического агентства. Твоя задача — продать тур, используя профессиональные техники продаж и НЛП.
 
@@ -63,7 +64,7 @@ async def get_gpt_response(user_message: str) -> str:
                     return "Извините, не удалось обработать запрос."
                 else:
                     error_text = await resp.text()
-                    print(f"❌ Hugging Face API error {resp.status}: {error_text}")
+                    print(f"❌ Hugging Face API error {resp.status}: {error_text[:200]}")
                     return f"Извините, сейчас технические неполадки (код {resp.status}). Попробуйте позже."
     except Exception as e:
         print(f"❌ Exception in GPT: {type(e).__name__}: {e}")
@@ -138,8 +139,7 @@ async def run_web():
 
 async def main():
     web_task = asyncio.create_task(run_web())
-    # Даём время серверу запуститься
-    await asyncio.sleep(2)
+    await asyncio.sleep(2)   # даём серверу время запуститься
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
