@@ -19,10 +19,20 @@ print(f"HUGGINGFACE_TOKEN: {'OK' if HUGGINGFACE_TOKEN else 'MISSING'}")
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 
-MODEL_URL = "https://api-inference.huggingface.co/models/yandex/yandexgpt-5-lite-instruct"
+# Новая модель вместо yandexgpt
+MODEL_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.3"
 
-SYSTEM_PROMPT = """Ты — Анна, топ-менеджер по продажам туристического агентства..."""
+SYSTEM_PROMPT = """Ты — Анна, топ-менеджер по продажам туристического агентства. Твоя задача — продать тур, используя профессиональные техники продаж и НЛП.
 
+Ты общаешься тепло, заботливо, немного эмоционально. Используешь активное слушание, задаёшь открытые вопросы. Обращаешься на «вы», но с лёгкой фамильярностью (как к хорошему знакомому). Никогда не признаёшься, что ты бот. Ты — живой менеджер.
+
+Используй техники: SPIN-продажи, AIDA, работа с возражениями, создание ценности и дефицита, социальное доказательство, НЛП-якорение, закрытие сделки.
+
+Всегда стремись к продаже. Если клиент проявляет интерес, сразу переходи к предложению. При возражениях применяй технику «цена vs ценность». Завершай диалог призывом к действию.
+
+Твоя цель — помочь клиенту выбрать тур и оформить бронь."""
+
+# Хранилище режимов (в памяти)
 modes = {}
 last_client = {}
 
@@ -33,6 +43,8 @@ async def set_mode(chat_id: int, mode: str):
     modes[chat_id] = mode
 
 async def get_gpt_response(user_message: str) -> str:
+    """Запрос к модели через Hugging Face Inference API"""
+    # Формируем сообщения в формате для Mistral (поддерживает system)
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": user_message}
@@ -40,19 +52,23 @@ async def get_gpt_response(user_message: str) -> str:
     headers = {"Authorization": f"Bearer {HUGGINGFACE_TOKEN}"}
     payload = {
         "inputs": messages,
-        "parameters": {"max_new_tokens": 500, "temperature": 0.85, "top_p": 0.95}
+        "parameters": {
+            "max_new_tokens": 500,
+            "temperature": 0.85,
+            "top_p": 0.95,
+            "return_full_text": False
+        }
     }
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(MODEL_URL, headers=headers, json=payload) as resp:
                 if resp.status == 200:
                     result = await resp.json()
+                    # Ожидаем, что результат — список с полем generated_text
                     if isinstance(result, list) and len(result) > 0:
-                        generated = result[0].get("generated_text", [])
-                        if generated and isinstance(generated, list):
-                            for msg in reversed(generated):
-                                if msg.get("role") == "assistant":
-                                    return msg.get("content", "Извините, не удалось сформулировать ответ.")
+                        generated = result[0].get("generated_text", "")
+                        if generated:
+                            return generated.strip()
                     return "Извините, не удалось обработать запрос."
                 else:
                     error_text = await resp.text()
@@ -72,6 +88,7 @@ async def help_cmd(message: types.Message):
 
 @dp.message(Command("switch"))
 async def switch_mode(message: types.Message):
+    """Переключить режим (только админ)"""
     if message.from_user.id != ADMIN_ID:
         await message.answer("У вас нет прав.")
         return
@@ -82,6 +99,7 @@ async def switch_mode(message: types.Message):
 
 @dp.message(Command("reply"))
 async def reply_as_bot(message: types.Message):
+    """Ответить клиенту от имени бота (только админ)"""
     if message.from_user.id != ADMIN_ID:
         return
     text = message.text.replace("/reply", "", 1).strip()
@@ -100,6 +118,7 @@ async def handle_message(message: types.Message):
     mode = await get_mode(message.chat.id)
     user_id = message.from_user.id
 
+    # Ручной режим: если не админ, пересылаем админу
     if mode == "manual" and user_id != ADMIN_ID:
         last_client[ADMIN_ID] = message.chat.id
         await bot.send_message(
@@ -109,6 +128,7 @@ async def handle_message(message: types.Message):
         await message.answer("Спасибо, ваш вопрос передан менеджеру. Ответ придёт в ближайшее время.")
         return
 
+    # Автоматический режим или сообщение от админа в том же чате
     await bot.send_chat_action(message.chat.id, "typing")
     await asyncio.sleep(random.uniform(0.5, 1.5))
     response = await get_gpt_response(message.text)
@@ -127,10 +147,15 @@ async def run_web():
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
     print(f"HTTP server started on port {port}")
+    # Бесконечно ждём
     await asyncio.Event().wait()
 
 async def main():
+    # Запускаем HTTP-сервер в фоне
     web_task = asyncio.create_task(run_web())
+    # Даём серверу время стартовать, чтобы Render успел обнаружить порт
+    await asyncio.sleep(2)
+    # Запускаем бота
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
