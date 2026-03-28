@@ -2,70 +2,36 @@ import asyncio
 import os
 import random
 import aiohttp
-from aiohttp import web
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command, CommandStart
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.fsm.storage.memory import MemoryStorage
+from aiohttp import web
 
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 HUGGINGFACE_TOKEN = os.getenv("HUGGINGFACE_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID", 0))  # добавьте ADMIN_ID в .env
+ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
 
-# Модель YandexGPT через Hugging Face
+# Проверка токенов при старте
+print(f"TELEGRAM_TOKEN: {'OK' if TELEGRAM_TOKEN else 'MISSING'}")
+print(f"HUGGINGFACE_TOKEN: {'OK' if HUGGINGFACE_TOKEN else 'MISSING'}")
+
+bot = Bot(token=TELEGRAM_TOKEN)
+dp = Dispatcher()
+
 MODEL_URL = "https://api-inference.huggingface.co/models/yandex/yandexgpt-5-lite-instruct"
 
-# Системный промпт с техниками продаж
-SYSTEM_PROMPT = """Ты — Маша, топ-менеджер по продажам туристического агентства. Твоя задача — проконсультировать и продать тур, используя профессиональные техники продаж и НЛП.
+SYSTEM_PROMPT = """Ты — Анна, топ-менеджер по продажам туристического агентства..."""
 
-**Твои особенности общения:**
-- Ты эмпатична, тепла, но настойчива в достижении цели — продаже.
-- Используешь активное слушание, задаёшь открытые вопросы.
-- Твоя речь живая, с эмоциональными вставками: «ого!», «представляете!», «как здорово!»
-- Обращаешься на «вы», но с лёгкой фамильярностью.
-- Никогда не признаёшься, что ты бот. Ты — живой менеджер.
-
-**Техники продаж, которые ты используешь:**
-1. SPIN-продажи: задавай ситуационные, проблемные, извлекающие и направляющие вопросы.
-2. AIDA: привлеки внимание, вызови интерес, сформируй желание, побуди к действию.
-3. Работа с возражениями: присоединяйся, выясни причину, переведи в преимущество, закрывай вопросом.
-4. Создание ценности и дефицита: «осталось 2 места», «предложение до завтра».
-5. Социальное доказательство: «многие наши клиенты выбирают этот отель».
-6. НЛП: присоединение, якорение, пресуппозиции, тройная спираль.
-7. Закрытие сделки: альтернативное закрытие, предполагаемое закрытие, закрытие на возражении.
-
-**Важные правила:**
-- Если клиент проявляет интерес, сразу переходи к созданию желания и предложению.
-- Если клиент говорит «дорого», применяй технику «цена vs ценность».
-- Если клиент сомневается, используй социальное доказательство и дефицит.
-- Всегда завершай диалог призывом к действию.
-- Если клиент согласен, переходи к сбору данных для бронирования (даты, контакты).
-- Твоя конечная цель — продажа. Будь настойчива, но не навязчива.
-- В конце, если продажа не состоялась, оставляй дверь открытой.
-
-Тебе приходит сообщение от клиента. Ответь, используя эти техники, и стремись к закрытию сделки."""
-
-# Хранилище режимов (auto/manual) в памяти (для простоты)
 modes = {}
-# Для ручного режима: запоминаем последнего клиента, которому отвечаем
 last_client = {}
 
-# Инициализация бота и диспетчера
-bot = Bot(token=TELEGRAM_TOKEN)
-storage = MemoryStorage()
-dp = Dispatcher(storage=storage)
-
-# === Функции для работы с режимами ===
 async def get_mode(chat_id: int) -> str:
     return modes.get(chat_id, "auto")
 
 async def set_mode(chat_id: int, mode: str):
     modes[chat_id] = mode
 
-# === Функция запроса к YandexGPT ===
 async def get_gpt_response(user_message: str) -> str:
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -74,28 +40,40 @@ async def get_gpt_response(user_message: str) -> str:
     headers = {"Authorization": f"Bearer {HUGGINGFACE_TOKEN}"}
     payload = {
         "inputs": messages,
-        "parameters": {"max_new_tokens": 600, "temperature": 0.85}
+        "parameters": {"max_new_tokens": 500, "temperature": 0.85, "top_p": 0.95}
     }
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(MODEL_URL, headers=headers, json=payload) as resp:
                 if resp.status == 200:
                     result = await resp.json()
-                    return result[0]["generated_text"][-1]["content"]
+                    if isinstance(result, list) and len(result) > 0:
+                        generated = result[0].get("generated_text", [])
+                        if generated and isinstance(generated, list):
+                            for msg in reversed(generated):
+                                if msg.get("role") == "assistant":
+                                    return msg.get("content", "Извините, не удалось сформулировать ответ.")
+                    return "Извините, не удалось обработать запрос."
                 else:
-                    return "Извините, сейчас технические неполадки. Попробуйте позже."
+                    error_text = await resp.text()
+                    print(f"❌ Hugging Face API error {resp.status}: {error_text[:200]}")
+                    return f"Извините, сейчас технические неполадки (код {resp.status}). Попробуйте позже."
     except Exception as e:
-        return "Что-то пошло не так. Напишите ещё раз, пожалуйста."
+        print(f"❌ Exception in GPT: {type(e).__name__}: {e}")
+        return "Извините, сейчас технические неполадки. Попробуйте позже."
 
-# === Хендлеры команд ===
 @dp.message(CommandStart())
 async def start(message: types.Message):
     await message.answer("Здравствуйте! Я Анна, консультант турагентства. Чем могу помочь? 😊")
 
+@dp.message(Command("help"))
+async def help_cmd(message: types.Message):
+    await message.answer("Просто задайте вопрос о путешествиях, и я помогу подобрать тур!")
+
 @dp.message(Command("switch"))
 async def switch_mode(message: types.Message):
     if message.from_user.id != ADMIN_ID:
-        await message.answer("У вас нет прав для этой команды.")
+        await message.answer("У вас нет прав.")
         return
     current = await get_mode(message.chat.id)
     new = "manual" if current == "auto" else "auto"
@@ -110,20 +88,18 @@ async def reply_as_bot(message: types.Message):
     if not text:
         await message.answer("Напишите текст после /reply")
         return
-    client_id = last_client.get(message.chat.id)
-    if not client_id:
+    client_chat_id = last_client.get(ADMIN_ID)
+    if not client_chat_id:
         await message.answer("Нет активного клиента для ответа.")
         return
-    await bot.send_message(client_id, f"👩‍💼 (Менеджер): {text}")
+    await bot.send_message(client_chat_id, f"👩‍💼 (Менеджер): {text}")
     await message.answer("Ответ отправлен.")
 
-# === Основной обработчик сообщений ===
 @dp.message()
-async def handle_message(message: types.Message, state: FSMContext):
+async def handle_message(message: types.Message):
     mode = await get_mode(message.chat.id)
     user_id = message.from_user.id
 
-    # Ручной режим: пересылаем админу
     if mode == "manual" and user_id != ADMIN_ID:
         last_client[ADMIN_ID] = message.chat.id
         await bot.send_message(
@@ -133,13 +109,12 @@ async def handle_message(message: types.Message, state: FSMContext):
         await message.answer("Спасибо, ваш вопрос передан менеджеру. Ответ придёт в ближайшее время.")
         return
 
-    # Автоматический режим или сообщение от админа
     await bot.send_chat_action(message.chat.id, "typing")
     await asyncio.sleep(random.uniform(0.5, 1.5))
     response = await get_gpt_response(message.text)
     await message.answer(response)
 
-# === HTTP-сервер для Render ===
+# HTTP-сервер для Render
 async def health(request):
     return web.Response(text="OK")
 
@@ -154,7 +129,6 @@ async def run_web():
     print(f"HTTP server started on port {port}")
     await asyncio.Event().wait()
 
-# === Запуск ===
 async def main():
     web_task = asyncio.create_task(run_web())
     await dp.start_polling(bot)
