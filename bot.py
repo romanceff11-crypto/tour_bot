@@ -10,6 +10,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiohttp import web
 from gigachat import GigaChat
+from gigachat.models import Chat, Messages, MessagesRole
 
 load_dotenv()
 
@@ -20,9 +21,8 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GIGACHAT_CREDENTIALS = os.getenv("GIGACHAT_CREDENTIALS")
 ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
 
-logger.info(f"TELEGRAM_TOKEN: {'OK' if TELEGRAM_TOKEN else 'MISSING'}")
-logger.info(f"GIGACHAT_CREDENTIALS: {'OK' if GIGACHAT_CREDENTIALS else 'MISSING'}")
-logger.info(f"ADMIN_ID: {ADMIN_ID}")
+logger.info(f"TELEGRAM_TOKEN: {'✅' if TELEGRAM_TOKEN else '❌'}")
+logger.info(f"GIGACHAT_CREDENTIALS: {'✅' if GIGACHAT_CREDENTIALS else '❌'}")
 
 bot = Bot(token=TELEGRAM_TOKEN)
 storage = MemoryStorage()
@@ -36,13 +36,11 @@ class BookingStates(StatesGroup):
 
 SYSTEM_PROMPT = """Ты — Анна, топ-менеджер по продажам туристического агентства. Твоя задача — продать тур, используя профессиональные техники продаж и НЛП.
 
-Ты общаешься тепло, заботливо, немного эмоционально. Используешь активное слушание, задаёшь открытые вопросы. Обращаешься на «вы», но с лёгкой фамильярностью (как к хорошему знакомому). Никогда не признаёшься, что ты бот. Ты — живой менеджер.
+Ты общаешься тепло, заботливо, немного эмоционально. Используешь активное слушание, задаёшь открытые вопросы. Обращаешься на «вы». Никогда не признаёшься, что ты бот.
 
 Используй техники: SPIN-продажи, AIDA, работа с возражениями, создание ценности и дефицита, социальное доказательство, НЛП-якорение, закрытие сделки.
 
-Всегда стремись к продаже. Если клиент проявляет интерес, сразу переходи к предложению. При возражениях применяй технику «цена vs ценность». Завершай диалог призывом к действию.
-
-Твоя цель — помочь клиенту выбрать тур и оформить бронь."""
+Всегда стремись к продаже. Если клиент проявляет интерес, сразу переходи к предложению. При возражениях применяй технику «цена vs ценность». Завершай диалог призывом к действию."""
 
 modes = {}
 last_client = {}
@@ -54,10 +52,7 @@ async def set_mode(chat_id: int, mode: str):
     modes[chat_id] = mode
 
 async def get_giga_response(user_message: str) -> str:
-    if not GIGACHAT_CREDENTIALS:
-        return "GigaChat не настроен. Пожалуйста, сообщите администратору."
     try:
-        # Используем контекстный менеджер для клиента
         with GigaChat(
             credentials=GIGACHAT_CREDENTIALS,
             verify_ssl_certs=False,
@@ -67,17 +62,17 @@ async def get_giga_response(user_message: str) -> str:
             max_tokens=500,
             timeout=30.0
         ) as giga:
-            # Передаём сообщения в виде списка словарей
             messages = [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_message}
+                Messages(role=MessagesRole.SYSTEM, content=SYSTEM_PROMPT),
+                Messages(role=MessagesRole.USER, content=user_message)
             ]
-            # Вызываем chat, передавая словарь
-            response = giga.chat(messages)
-            # Извлекаем ответ
-            return response.choices[0].message.content
+            chat = Chat(messages=messages)
+            response = giga.chat(chat)
+            if response.choices and len(response.choices) > 0:
+                return response.choices[0].message.content
+            return "Извините, не удалось получить ответ от сервиса."
     except Exception as e:
-        logger.error(f"GigaChat error: {e}")
+        logger.error(f"Ошибка GigaChat: {type(e).__name__}: {e}")
         return "Извините, сейчас технические неполадки. Попробуйте позже."
 
 @dp.message(CommandStart())
@@ -87,11 +82,10 @@ async def start(message: types.Message):
 @dp.message(Command("help"))
 async def help_cmd(message: types.Message):
     await message.answer(
-        "Я помогу подобрать тур, забронировать и отвечу на вопросы.\n"
         "Команды:\n"
         "/book – начать бронирование\n"
-        "/switch – переключить ручной режим (только админ)\n"
-        "/reply <текст> – ответить клиенту (только админ)"
+        "/switch – переключить ручной режим (админ)\n"
+        "/reply – ответить клиенту (админ)"
     )
 
 @dp.message(Command("book"))
@@ -127,16 +121,16 @@ async def book_contacts(message: types.Message, state: FSMContext):
         f"📅 Даты: {data['dates']}\n"
         f"💰 Бюджет: {data['budget']} руб.\n"
         f"📞 Контакты: {data['contacts']}\n\n"
-        f"Менеджер свяжется с вами в ближайшее время."
+        f"Менеджер свяжется с вами."
     )
     if ADMIN_ID:
-        await bot.send_message(ADMIN_ID, f"Новая заявка от {message.from_user.full_name}: {data}")
+        await bot.send_message(ADMIN_ID, f"🔔 Новая заявка!\n{data}")
     await state.clear()
 
 @dp.message(Command("switch"))
 async def switch_mode(message: types.Message):
     if message.from_user.id != ADMIN_ID:
-        await message.answer("У вас нет прав.")
+        await message.answer("⛔ У вас нет прав.")
         return
     current = await get_mode(message.chat.id)
     new = "manual" if current == "auto" else "auto"
@@ -149,14 +143,14 @@ async def reply_as_bot(message: types.Message):
         return
     text = message.text.replace("/reply", "", 1).strip()
     if not text:
-        await message.answer("Напишите текст после /reply")
+        await message.answer("Использование: `/reply Текст`", parse_mode="Markdown")
         return
-    client_chat_id = last_client.get(ADMIN_ID)
-    if not client_chat_id:
-        await message.answer("Нет активного клиента для ответа.")
+    client_id = last_client.get(ADMIN_ID)
+    if not client_id:
+        await message.answer("Нет активного клиента.")
         return
-    await bot.send_message(client_chat_id, f"👩‍💼 (Менеджер): {text}")
-    await message.answer("Ответ отправлен.")
+    await bot.send_message(client_id, f"👩‍💼 *Менеджер*: {text}", parse_mode="Markdown")
+    await message.answer("✅ Ответ отправлен.")
 
 @dp.message()
 async def handle_message(message: types.Message, state: FSMContext):
@@ -164,13 +158,15 @@ async def handle_message(message: types.Message, state: FSMContext):
         return
     mode = await get_mode(message.chat.id)
     user_id = message.from_user.id
+
     if mode == "manual" and user_id != ADMIN_ID:
         last_client[ADMIN_ID] = message.chat.id
-        await bot.send_message(ADMIN_ID, f"✉️ Сообщение от клиента (чат {message.chat.id}):\n{message.text}")
-        await message.answer("Спасибо, ваш вопрос передан менеджеру. Ответ придёт в ближайшее время.")
+        await bot.send_message(ADMIN_ID, f"✉️ Сообщение от {message.chat.id}:\n{message.text}")
+        await message.answer("Спасибо, вопрос передан менеджеру.")
         return
+
     await bot.send_chat_action(message.chat.id, "typing")
-    await asyncio.sleep(random.uniform(0.5, 1.5))
+    await asyncio.sleep(random.uniform(0.5, 1.0))
     response = await get_giga_response(message.text)
     await message.answer(response)
 
@@ -185,12 +181,12 @@ async def run_web():
     port = int(os.environ.get("PORT", 8000))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    print(f"HTTP server started on port {port}")
+    logger.info(f"HTTP сервер запущен на порту {port}")
     await asyncio.Event().wait()
 
 async def main():
     web_task = asyncio.create_task(run_web())
-    await asyncio.sleep(2)
+    await asyncio.sleep(1)
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
