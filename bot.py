@@ -18,8 +18,7 @@ print(f"HUGGINGFACE_TOKEN: {'OK' if HUGGINGFACE_TOKEN else 'MISSING'}")
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 
-# Используем новый эндпоинт с моделью google/gemma-2-9b-it
-MODEL_URL = "https://router.huggingface.co/hf-inference/models/google/gemma-2-9b-it"
+MODEL_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.3"
 
 SYSTEM_PROMPT = """Ты — Анна, топ-менеджер по продажам туристического агентства. Твоя задача — продать тур, используя профессиональные техники продаж и НЛП.
 
@@ -41,17 +40,13 @@ async def set_mode(chat_id: int, mode: str):
     modes[chat_id] = mode
 
 async def get_gpt_response(user_message: str) -> str:
-    # Формируем сообщения в формате, который ожидает Gemma
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": user_message}
-    ]
+    prompt = f"[INST] {SYSTEM_PROMPT}\n\n{user_message} [/INST]"
     headers = {
         "Authorization": f"Bearer {HUGGINGFACE_TOKEN}",
         "Content-Type": "application/json"
     }
     payload = {
-        "inputs": messages,
+        "inputs": prompt,
         "parameters": {"max_new_tokens": 500, "temperature": 0.85, "top_p": 0.95}
     }
     try:
@@ -59,31 +54,15 @@ async def get_gpt_response(user_message: str) -> str:
             async with session.post(MODEL_URL, headers=headers, json=payload) as resp:
                 if resp.status == 200:
                     result = await resp.json()
-                    # Разные модели могут возвращать разные структуры
                     if isinstance(result, dict):
-                        # Ожидаем поле generated_text
-                        if "generated_text" in result:
-                            return result["generated_text"]
-                        # Или может быть поле "choices"
-                        elif "choices" in result:
-                            return result["choices"][0]["message"]["content"]
-                        else:
-                            return "Извините, не удалось сформулировать ответ."
+                        return result.get("generated_text", "Извините, не удалось сформулировать ответ.").strip()
                     elif isinstance(result, list) and len(result) > 0:
-                        # Иногда возвращается список с одним элементом
-                        first = result[0]
-                        if isinstance(first, dict) and "generated_text" in first:
-                            return first["generated_text"]
-                        else:
-                            return str(first)
+                        return result[0].get("generated_text", "Извините, не удалось сформулировать ответ.").strip()
                     else:
                         return "Извините, не удалось обработать запрос."
                 else:
                     error_text = await resp.text()
                     print(f"❌ Hugging Face API error {resp.status}: {error_text[:200]}")
-                    # Если ошибка 410, выдадим понятное сообщение
-                    if resp.status == 410:
-                        return "Извините, API изменился, технические работы. Попробуйте позже."
                     return f"Извините, сейчас технические неполадки (код {resp.status}). Попробуйте позже."
     except Exception as e:
         print(f"❌ Exception in GPT: {type(e).__name__}: {e}")
@@ -157,7 +136,7 @@ async def run_web():
 
 async def main():
     web_task = asyncio.create_task(run_web())
-    await asyncio.sleep(2)  # даём время серверу запуститься
+    await asyncio.sleep(2)
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
