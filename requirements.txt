@@ -1,4 +1,4 @@
-aiogram
-python-dotenv
-aiohttp
-gigachat
+aiogram==3.15.0
+python-dotenv==1.0.1
+aiohttp==3.11.0
+gigachat==0.2.0
