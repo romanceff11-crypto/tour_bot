@@ -13,7 +13,6 @@ from gigachat import GigaChat
 from gigachat.models import Chat, Messages, MessagesRole
 
 load_dotenv()
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -81,12 +80,7 @@ async def start(message: types.Message):
 
 @dp.message(Command("help"))
 async def help_cmd(message: types.Message):
-    await message.answer(
-        "Команды:\n"
-        "/book – начать бронирование\n"
-        "/switch – переключить ручной режим (админ)\n"
-        "/reply – ответить клиенту (админ)"
-    )
+    await message.answer("Команды:\n/book – начать бронирование\n/switch – ручной режим\n/reply – ответ клиенту")
 
 @dp.message(Command("book"))
 async def book_start(message: types.Message, state: FSMContext):
@@ -97,7 +91,7 @@ async def book_start(message: types.Message, state: FSMContext):
 async def book_destination(message: types.Message, state: FSMContext):
     await state.update_data(destination=message.text)
     await state.set_state(BookingStates.dates)
-    await message.answer("Когда планируете поездку? (примерные даты или месяц)")
+    await message.answer("Когда планируете поездку? (даты или месяц)")
 
 @dp.message(BookingStates.dates)
 async def book_dates(message: types.Message, state: FSMContext):
@@ -109,7 +103,7 @@ async def book_dates(message: types.Message, state: FSMContext):
 async def book_budget(message: types.Message, state: FSMContext):
     await state.update_data(budget=message.text)
     await state.set_state(BookingStates.contacts)
-    await message.answer("Оставьте ваш номер телефона или Telegram @username для связи.")
+    await message.answer("Оставьте ваш номер телефона или Telegram @username")
 
 @dp.message(BookingStates.contacts)
 async def book_contacts(message: types.Message, state: FSMContext):
